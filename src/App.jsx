@@ -2,6 +2,7 @@ import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+const LAST_UPDATED = "March 18, 2026";
 
 async function parseJsonResponse(response) {
   const data = await response.json().catch(() => ({}));
@@ -57,7 +58,7 @@ function useAuth() {
   return [auth, setAuth];
 }
 
-function Shell({ auth, setAuth, children }) {
+function Shell({ auth, setAuth, children, showAppNavigation = true }) {
   const location = useLocation();
 
   function handleConnect() {
@@ -115,15 +116,32 @@ function Shell({ auth, setAuth, children }) {
         </div>
 
         <nav className="tabs" aria-label="Pages">
-          <NavLink to="/" end className={({ isActive }) => (isActive ? "tab tab--active" : "tab")}>
-            Upload & Split
+          {showAppNavigation ? (
+            <>
+              <NavLink to="/" end className={({ isActive }) => (isActive ? "tab tab--active" : "tab")}>
+                Upload & Split
+              </NavLink>
+              <NavLink to="/search" className={({ isActive }) => (isActive ? "tab tab--active" : "tab")}>
+                Search & Download
+              </NavLink>
+            </>
+          ) : null}
+          <NavLink to="/privacy-policy" className={({ isActive }) => (isActive ? "tab tab--active" : "tab")}>
+            Privacy Policy
           </NavLink>
-          <NavLink to="/search" className={({ isActive }) => (isActive ? "tab tab--active" : "tab")}>
-            Search & Download
+          <NavLink to="/terms-of-service" className={({ isActive }) => (isActive ? "tab tab--active" : "tab")}>
+            Terms of Service
           </NavLink>
         </nav>
       </header>
       <main>{children}</main>
+      <footer className="site-footer">
+        <p>Use of this app is subject to the published policy pages below.</p>
+        <div className="site-footer__links">
+          <NavLink to="/privacy-policy">Privacy Policy</NavLink>
+          <NavLink to="/terms-of-service">Terms of Service</NavLink>
+        </div>
+      </footer>
     </div>
   );
 }
@@ -356,6 +374,171 @@ function SearchPage({ auth, setAuth }) {
   );
 }
 
+function PolicyLayout({ auth, setAuth, title, summary, children }) {
+  return (
+    <Shell auth={auth} setAuth={setAuth} showAppNavigation={false}>
+      <section className="panel legal-panel">
+        <div className="panel__intro">
+          <p className="eyebrow">Legal</p>
+          <h2>{title}</h2>
+          <p>{summary}</p>
+          <p className="legal-updated">Last updated: {LAST_UPDATED}</p>
+        </div>
+        <div className="legal-copy">{children}</div>
+      </section>
+    </Shell>
+  );
+}
+
+function PrivacyPolicyPage({ auth, setAuth }) {
+  return (
+    <PolicyLayout
+      auth={auth}
+      setAuth={setAuth}
+      title="Privacy Policy"
+      summary="This page explains what data this app accesses, how it uses Google Drive data, and what happens to uploaded PDFs."
+    >
+      <section>
+        <h3>Information We Access</h3>
+        <p>
+          When you connect your Google account, this app receives Google OAuth tokens that allow
+          it to access the Google Drive folder you choose to use with the app.
+        </p>
+        <p>
+          When you upload a PDF, the app reads the file content to split the document into
+          separate pages and extract the student identifier used for naming each page.
+        </p>
+      </section>
+
+      <section>
+        <h3>How We Use Your Data</h3>
+        <p>
+          Your data is used only to authenticate you with Google Drive, split uploaded PDFs,
+          name the resulting files, upload them to your selected Drive folder, search for saved
+          files, and download files back to you on request.
+        </p>
+        <p>
+          The app does not use your Google Drive data for advertising, profiling, resale, or any
+          unrelated analytics purpose.
+        </p>
+      </section>
+
+      <section>
+        <h3>Storage and Retention</h3>
+        <p>
+          Uploaded PDFs and generated page PDFs are stored in your own Google Drive folder.
+          Authentication data is stored in secure HTTP-only cookies to maintain your signed-in
+          session.
+        </p>
+        <p>
+          The app is designed to process files for the requested workflow and does not maintain a
+          separate permanent database of your PDF content.
+        </p>
+      </section>
+
+      <section>
+        <h3>Google User Data</h3>
+        <p>
+          Access to Google user data is limited to the functionality required to upload, locate,
+          and download files in Google Drive. The app requests Google Drive permissions only so it
+          can perform these user-initiated actions.
+        </p>
+      </section>
+
+      <section>
+        <h3>Your Choices</h3>
+        <p>
+          You may stop using the app at any time, disconnect your account from the app interface,
+          remove uploaded files from your Google Drive folder, or revoke the app&apos;s access from
+          your Google Account permissions page.
+        </p>
+      </section>
+
+      <section>
+        <h3>Contact</h3>
+        <p>
+          If you publish this app publicly, replace this paragraph with your business or support
+          email so users and Google reviewers have a clear contact method.
+        </p>
+      </section>
+    </PolicyLayout>
+  );
+}
+
+function TermsOfServicePage({ auth, setAuth }) {
+  return (
+    <PolicyLayout
+      auth={auth}
+      setAuth={setAuth}
+      title="Terms of Service"
+      summary="These terms describe the acceptable use of the PDF Drive Splitter application."
+    >
+      <section>
+        <h3>Use of the Service</h3>
+        <p>
+          This application is provided to let you upload PDFs, split them into separate pages,
+          name the generated PDFs using extracted identifiers, store them in your Google Drive,
+          and search or download those stored files.
+        </p>
+      </section>
+
+      <section>
+        <h3>Your Responsibilities</h3>
+        <p>
+          You are responsible for the files you upload, the legality of the content, and your use
+          of any student, personal, or confidential information contained in those PDFs.
+        </p>
+        <p>
+          You must use the service only for lawful purposes and only with files and Google Drive
+          content you are authorized to access and manage.
+        </p>
+      </section>
+
+      <section>
+        <h3>Google Account Access</h3>
+        <p>
+          By connecting your Google account, you authorize the app to perform the Google
+          Drive-related actions required for the workflow you initiate. You may revoke that access
+          at any time through your Google account settings.
+        </p>
+      </section>
+
+      <section>
+        <h3>Availability</h3>
+        <p>
+          The service is provided on an as-is and as-available basis. Availability may be affected
+          by hosting limits, Google API limits, deployment changes, or maintenance.
+        </p>
+      </section>
+
+      <section>
+        <h3>Limitation of Liability</h3>
+        <p>
+          To the fullest extent allowed by law, the service provider is not liable for indirect,
+          incidental, special, or consequential damages arising from use of the app, including data
+          loss, interrupted service, or file-processing errors.
+        </p>
+      </section>
+
+      <section>
+        <h3>Termination</h3>
+        <p>
+          Access to the service may be limited or terminated if the app is misused, if security
+          issues arise, or if the service is discontinued.
+        </p>
+      </section>
+
+      <section>
+        <h3>Changes to These Terms</h3>
+        <p>
+          These terms may be updated from time to time. Continued use of the app after changes are
+          published means you accept the revised terms.
+        </p>
+      </section>
+    </PolicyLayout>
+  );
+}
+
 export default function App() {
   const [auth, setAuth] = useAuth();
 
@@ -363,6 +546,8 @@ export default function App() {
     <Routes>
       <Route path="/" element={<UploadPage auth={auth} setAuth={setAuth} />} />
       <Route path="/search" element={<SearchPage auth={auth} setAuth={setAuth} />} />
+      <Route path="/privacy-policy" element={<PrivacyPolicyPage auth={auth} setAuth={setAuth} />} />
+      <Route path="/terms-of-service" element={<TermsOfServicePage auth={auth} setAuth={setAuth} />} />
     </Routes>
   );
 }

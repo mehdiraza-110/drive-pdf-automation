@@ -53,6 +53,7 @@ input {
 
 .hero h1,
 .panel h2,
+.legal-copy h3,
 .result-card h3,
 .search-result h3 {
   font-family: "Space Grotesk", sans-serif;
@@ -213,6 +214,59 @@ input {
   flex-wrap: wrap;
 }
 
+.site-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 1.25rem;
+  padding: 0 0.5rem;
+  color: #385169;
+}
+
+.site-footer p {
+  margin: 0;
+}
+
+.site-footer__links {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.site-footer__links a {
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.legal-panel {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.legal-updated {
+  color: #5c7086;
+}
+
+.legal-copy {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.legal-copy section {
+  display: grid;
+  gap: 0.7rem;
+  padding: 1.2rem;
+  border-radius: 22px;
+  background: rgba(243, 247, 250, 0.9);
+  border: 1px solid rgba(19, 34, 56, 0.08);
+}
+
+.legal-copy p {
+  margin: 0;
+}
+
 @media (max-width: 720px) {
   .app-shell {
     width: min(100% - 1rem, 1120px);
@@ -227,7 +281,8 @@ input {
 
   .upload-form,
   .search-form,
-  .search-result__actions {
+  .search-result__actions,
+  .site-footer {
     flex-direction: column;
     align-items: stretch;
   }
