@@ -8,6 +8,7 @@ import multer from "multer";
 import { google } from "googleapis";
 import { PDFDocument } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import * as pdfjsWorker from "pdfjs-dist/legacy/build/pdf.worker.mjs";
 
 const app = express();
 const upload = multer({
@@ -38,6 +39,12 @@ const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/drive.readonly"
 ];
+
+// Vercel's serverless bundle can break pdf.js's runtime-relative fake worker import.
+// Pre-registering the worker module lets pdf.js reuse it without importing "./pdf.worker.mjs".
+if (!globalThis.pdfjsWorker) {
+  globalThis.pdfjsWorker = pdfjsWorker;
+}
 
 app.use(
   cors({
