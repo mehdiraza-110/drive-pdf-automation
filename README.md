@@ -1,4 +1,4 @@
-# PDF Drive Splitter
+# NGS Voucher
 
 This app gives you a two-page workflow:
 

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const LAST_UPDATED = "March 18, 2026";
+const APP_NAME = "NGS Voucher";
 
 async function parseJsonResponse(response) {
   const data = await response.json().catch(() => ({}));
@@ -83,7 +84,7 @@ function Shell({ auth, setAuth, children, showAppNavigation = true }) {
     <div className="app-shell">
       <header className="hero">
         <div className="hero__content">
-          <p className="eyebrow">PDF + Google Drive Workflow</p>
+          <p className="eyebrow">{APP_NAME}</p>
           <h1>Split large PDFs, auto-name each page, and pull them back by file name.</h1>
           <p className="hero__text">
             Connect your Google account once, upload a multi-page PDF, save every page into
@@ -136,7 +137,7 @@ function Shell({ auth, setAuth, children, showAppNavigation = true }) {
       </header>
       <main>{children}</main>
       <footer className="site-footer">
-        <p>Use of this app is subject to the published policy pages below.</p>
+        <p>Use of {APP_NAME} is subject to the published policy pages below.</p>
         <div className="site-footer__links">
           <NavLink to="/privacy-policy">Privacy Policy</NavLink>
           <NavLink to="/terms-of-service">Terms of Service</NavLink>
@@ -402,7 +403,7 @@ function PrivacyPolicyPage({ auth, setAuth }) {
         <h3>Information We Access</h3>
         <p>
           When you connect your Google account, this app receives Google OAuth tokens that allow
-          it to access the Google Drive folder you choose to use with the app.
+          it to access the Google Drive folder you choose to use with {APP_NAME}.
         </p>
         <p>
           When you upload a PDF, the app reads the file content to split the document into
@@ -418,8 +419,8 @@ function PrivacyPolicyPage({ auth, setAuth }) {
           files, and download files back to you on request.
         </p>
         <p>
-          The app does not use your Google Drive data for advertising, profiling, resale, or any
-          unrelated analytics purpose.
+          {APP_NAME} does not use your Google Drive data for advertising, profiling, resale, or
+          any unrelated analytics purpose.
         </p>
       </section>
 
@@ -431,8 +432,8 @@ function PrivacyPolicyPage({ auth, setAuth }) {
           session.
         </p>
         <p>
-          The app is designed to process files for the requested workflow and does not maintain a
-          separate permanent database of your PDF content.
+          {APP_NAME} is designed to process files for the requested workflow and does not maintain
+          a separate permanent database of your PDF content.
         </p>
       </section>
 
@@ -440,24 +441,24 @@ function PrivacyPolicyPage({ auth, setAuth }) {
         <h3>Google User Data</h3>
         <p>
           Access to Google user data is limited to the functionality required to upload, locate,
-          and download files in Google Drive. The app requests Google Drive permissions only so it
-          can perform these user-initiated actions.
+          and download files in Google Drive. {APP_NAME} requests Google Drive permissions only so
+          it can perform these user-initiated actions.
         </p>
       </section>
 
       <section>
         <h3>Your Choices</h3>
         <p>
-          You may stop using the app at any time, disconnect your account from the app interface,
-          remove uploaded files from your Google Drive folder, or revoke the app&apos;s access from
-          your Google Account permissions page.
+          You may stop using {APP_NAME} at any time, disconnect your account from the app
+          interface, remove uploaded files from your Google Drive folder, or revoke the
+          app&apos;s access from your Google Account permissions page.
         </p>
       </section>
 
       <section>
         <h3>Contact</h3>
         <p>
-          If you publish this app publicly, replace this paragraph with your business or support
+          If you publish {APP_NAME} publicly, replace this paragraph with your business or support
           email so users and Google reviewers have a clear contact method.
         </p>
       </section>
@@ -471,7 +472,7 @@ function TermsOfServicePage({ auth, setAuth }) {
       auth={auth}
       setAuth={setAuth}
       title="Terms of Service"
-      summary="These terms describe the acceptable use of the PDF Drive Splitter application."
+      summary={`These terms describe the acceptable use of the ${APP_NAME} application.`}
     >
       <section>
         <h3>Use of the Service</h3>
@@ -497,7 +498,7 @@ function TermsOfServicePage({ auth, setAuth }) {
       <section>
         <h3>Google Account Access</h3>
         <p>
-          By connecting your Google account, you authorize the app to perform the Google
+          By connecting your Google account, you authorize {APP_NAME} to perform the Google
           Drive-related actions required for the workflow you initiate. You may revoke that access
           at any time through your Google account settings.
         </p>
@@ -515,8 +516,8 @@ function TermsOfServicePage({ auth, setAuth }) {
         <h3>Limitation of Liability</h3>
         <p>
           To the fullest extent allowed by law, the service provider is not liable for indirect,
-          incidental, special, or consequential damages arising from use of the app, including data
-          loss, interrupted service, or file-processing errors.
+          incidental, special, or consequential damages arising from use of {APP_NAME}, including
+          data loss, interrupted service, or file-processing errors.
         </p>
       </section>
 
