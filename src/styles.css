@@ -174,12 +174,44 @@ input {
 
 .summary-card,
 .search-result,
-.empty-state {
+.empty-state,
+.loading-card {
   margin-top: 1.4rem;
   padding: 1.2rem;
   border-radius: 22px;
   background: rgba(243, 247, 250, 0.9);
   border: 1px solid rgba(19, 34, 56, 0.08);
+}
+
+.loading-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.loading-card__content {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.loading-card__content h3,
+.loading-card__content p {
+  margin: 0;
+}
+
+.loading-card__content h3 {
+  font-family: "Space Grotesk", sans-serif;
+  letter-spacing: -0.03em;
+}
+
+.loading-card__spinner {
+  width: 2.8rem;
+  height: 2.8rem;
+  border-radius: 999px;
+  border: 4px solid rgba(10, 92, 143, 0.16);
+  border-top-color: #0a5c8f;
+  animation: spin 0.9s linear infinite;
+  flex-shrink: 0;
 }
 
 .results-grid {
@@ -285,5 +317,15 @@ input {
   .site-footer {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .loading-card {
+    align-items: flex-start;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }

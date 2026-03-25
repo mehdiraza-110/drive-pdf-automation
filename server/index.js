@@ -25,6 +25,8 @@ const GOOGLE_OAUTH_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID;
 const GOOGLE_OAUTH_CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
 const GOOGLE_OAUTH_REDIRECT_URI =
   process.env.GOOGLE_OAUTH_REDIRECT_URI || "http://localhost:3001/api/auth/google/callback";
+const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 const SESSION_SECRET = process.env.SESSION_SECRET || "change-me-in-env";
 const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME || "drive_tokens";
 const OAUTH_STATE_COOKIE_NAME = process.env.OAUTH_STATE_COOKIE_NAME || "oauth_state";
@@ -62,7 +64,7 @@ app.use(
 app.use(express.json());
 app.set("trust proxy", 1);
 
-function assertConfig() {
+function assertOAuthConfig() {
   if (
     !GOOGLE_DRIVE_FOLDER_ID ||
     !GOOGLE_OAUTH_CLIENT_ID ||
@@ -74,14 +76,35 @@ function assertConfig() {
   }
 }
 
+function assertServiceAccountConfig() {
+  if (!GOOGLE_DRIVE_FOLDER_ID || !GOOGLE_SERVICE_ACCOUNT_EMAIL || !GOOGLE_PRIVATE_KEY) {
+    throw new Error("Google service account environment variables are not fully configured.");
+  }
+}
+
 function createOAuthClient() {
-  assertConfig();
+  assertOAuthConfig();
 
   return new google.auth.OAuth2(
     GOOGLE_OAUTH_CLIENT_ID,
     GOOGLE_OAUTH_CLIENT_SECRET,
     GOOGLE_OAUTH_REDIRECT_URI
   );
+}
+
+function createServiceAccountDrive() {
+  assertServiceAccountConfig();
+
+  const auth = new google.auth.JWT({
+    email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    key: GOOGLE_PRIVATE_KEY,
+    scopes: ["https://www.googleapis.com/auth/drive"]
+  });
+
+  return google.drive({
+    version: "v3",
+    auth
+  });
 }
 
 function getCookieOptions(maxAge) {
@@ -265,6 +288,10 @@ function getAuthenticatedDrive(request, response) {
   });
 }
 
+function getSharedDrive() {
+  return createServiceAccountDrive();
+}
+
 function sanitizeFileName(value) {
   return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").trim();
 }
@@ -363,6 +390,25 @@ async function findFileByName(drive, fileName) {
   });
 
   return response.data.files?.[0] || null;
+}
+
+async function countFilesInFolder(drive) {
+  let totalCount = 0;
+  let pageToken;
+
+  do {
+    const response = await drive.files.list({
+      q: [`'${GOOGLE_DRIVE_FOLDER_ID}' in parents`, "trashed = false"].join(" and "),
+      fields: "nextPageToken, files(id)",
+      pageSize: 1000,
+      pageToken
+    });
+
+    totalCount += response.data.files?.length || 0;
+    pageToken = response.data.nextPageToken || undefined;
+  } while (pageToken);
+
+  return totalCount;
 }
 
 function getAuthStatus(request) {
@@ -479,9 +525,22 @@ app.post("/api/upload-split", upload.single("pdf"), async (request, response) =>
   }
 });
 
+app.get("/api/admin/folder-stats", async (_request, response) => {
+  try {
+    const drive = getSharedDrive();
+    const fileCount = await countFilesInFolder(drive);
+
+    return response.json({ fileCount });
+  } catch (error) {
+    return response.status(error.statusCode || 500).json({
+      error: error.message || "Failed to load folder stats."
+    });
+  }
+});
+
 app.get("/api/files/:name", async (request, response) => {
   try {
-    const drive = getAuthenticatedDrive(request, response);
+    const drive = getSharedDrive();
     const file = await findFileByName(drive, request.params.name);
 
     if (!file) {
@@ -498,7 +557,7 @@ app.get("/api/files/:name", async (request, response) => {
 
 app.get("/api/files/:id/download", async (request, response) => {
   try {
-    const drive = getAuthenticatedDrive(request, response);
+    const drive = getSharedDrive();
     const metadata = await drive.files.get({
       fileId: request.params.id,
       fields: "name"
