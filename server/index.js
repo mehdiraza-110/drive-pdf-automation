@@ -10,16 +10,22 @@ import { PDFDocument } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import * as pdfjsWorker from "pdfjs-dist/legacy/build/pdf.worker.mjs";
 
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 80);
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+const FRONTEND_ORIGINS = (process.env.FRONTEND_URLS || process.env.FRONTEND_URL || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 const app = express();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 50 * 1024 * 1024
+    fileSize: MAX_UPLOAD_BYTES
   }
 });
 
 const PORT = Number(process.env.PORT || 3001);
-const FRONTEND_URL = process.env.FRONTEND_URL || "";
 const GOOGLE_DRIVE_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 const GOOGLE_OAUTH_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID;
 const GOOGLE_OAUTH_CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
@@ -51,7 +57,7 @@ if (!globalThis.pdfjsWorker) {
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || !FRONTEND_URL || origin === FRONTEND_URL) {
+      if (!origin || FRONTEND_ORIGINS.length === 0 || FRONTEND_ORIGINS.includes(origin)) {
         callback(null, true);
         return;
       }
@@ -252,7 +258,7 @@ function getRequestOrigin(request) {
 }
 
 function getDefaultReturnTo(request) {
-  return FRONTEND_URL || `${getRequestOrigin(request)}/`;
+  return FRONTEND_ORIGINS[0] || `${getRequestOrigin(request)}/`;
 }
 
 function getStoredTokens(request) {
@@ -589,6 +595,22 @@ app.get("/api/files/:id/download", async (request, response) => {
       error: error.message || "Failed to download the PDF."
     });
   }
+});
+
+app.use((error, _request, response, next) => {
+  if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+    return response.status(413).json({
+      error: `Uploaded PDF exceeds the ${MAX_UPLOAD_MB} MB limit.`
+    });
+  }
+
+  if (error?.message === "CORS origin not allowed.") {
+    return response.status(403).json({
+      error: error.message
+    });
+  }
+
+  return next(error);
 });
 
 export default app;

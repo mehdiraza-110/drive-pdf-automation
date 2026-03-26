@@ -23,47 +23,66 @@ This app gives you a two-page workflow:
 10. Run `npm run dev`.
 11. Open `http://localhost:5173`.
 
-## Deploy On Vercel
+## Deploy Frontend On Vercel
 
-This project is prepared for a single Vercel deployment:
+This project now expects:
 
-- Vite frontend served from the main site
-- Express backend served through `/api/index.js`
-- Google OAuth stored in encrypted HTTP-only cookies so it works with Vercel Functions
+- Vite frontend on Vercel
+- Express backend on your own server such as an Ubuntu Lightsail instance
+- `VITE_API_BASE_URL` pointing the frontend at the external backend
 
 ### Vercel steps
 
 1. Push the project to GitHub, GitLab, or Bitbucket.
 2. Import the repo into Vercel.
-3. In Vercel project settings, add these environment variables:
-   - `GOOGLE_DRIVE_FOLDER_ID`
-   - `GOOGLE_SERVICE_ACCOUNT_EMAIL`
-   - `GOOGLE_OAUTH_CLIENT_ID`
-   - `GOOGLE_OAUTH_CLIENT_SECRET`
-   - `GOOGLE_PRIVATE_KEY`
-   - `GOOGLE_OAUTH_REDIRECT_URI`
-   - `SESSION_SECRET`
+3. In Vercel project settings, add:
+   - `VITE_API_BASE_URL=https://api.your-domain.com`
+4. Deploy.
+
+## Deploy Backend On Ubuntu / Lightsail
+
+1. Point a backend domain such as `api.your-domain.com` to your Lightsail instance.
+2. Install Node.js 20+ on the instance.
+3. Copy the project to the server.
+4. Run `npm install`.
+5. Create a production `.env` with values like these:
+   - `PORT=3001`
+   - `FRONTEND_URL=https://your-frontend.vercel.app`
+   - `FRONTEND_URLS=https://your-frontend.vercel.app,https://your-custom-frontend-domain.com`
+   - `GOOGLE_DRIVE_FOLDER_ID=...`
+   - `GOOGLE_SERVICE_ACCOUNT_EMAIL=...`
+   - `GOOGLE_OAUTH_CLIENT_ID=...`
+   - `GOOGLE_OAUTH_CLIENT_SECRET=...`
+   - `GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"`
+   - `GOOGLE_OAUTH_REDIRECT_URI=https://api.your-domain.com/api/auth/google/callback`
+   - `SESSION_SECRET=long-random-secret`
+   - `COOKIE_SAME_SITE=none`
    - `COOKIE_SECURE=true`
-4. Set `GOOGLE_OAUTH_REDIRECT_URI` to:
-   - `https://your-project-name.vercel.app/api/auth/google/callback`
-5. In Google Cloud OAuth settings, add that same production callback URL.
-6. Deploy.
+   - `MAX_UPLOAD_MB=80`
+6. In Google Cloud OAuth settings, add this authorized redirect URI:
+   - `https://api.your-domain.com/api/auth/google/callback`
+7. Start the backend with:
+   - `npm start`
+8. Put the Node app behind Nginx or another reverse proxy and enable HTTPS.
 
-### Optional Vercel env vars
+### Notes for cross-site auth
 
-- `FRONTEND_URL`
-- `VITE_API_BASE_URL`
+- The frontend already sends requests with `credentials: "include"`.
+- Because Vercel and Lightsail will be on different origins, production cookies should use `COOKIE_SAME_SITE=none` and `COOKIE_SECURE=true`.
+- `FRONTEND_URLS` can contain a comma-separated allowlist if you want both your Vercel domain and your custom frontend domain to work.
+- If you keep only one frontend origin, setting `FRONTEND_URL` alone is enough.
+
+### Optional backend env vars
+
 - `AUTH_COOKIE_NAME`
 - `OAUTH_STATE_COOKIE_NAME`
-- `COOKIE_SAME_SITE`
 - `STUDENT_ID_LABEL_REGEX`
 - `ID_REGEX`
-
-For a normal single-domain Vercel deploy, you usually do not need `FRONTEND_URL` or `VITE_API_BASE_URL`.
 
 ## Notes
 
 - Upload uses OAuth 2.0, while search and download use a shared service account that must have access to the target folder.
+- Upload processing happens on the backend server, so it is no longer limited by Vercel Function request size.
 - The app first looks for a number after the `Std. #` label, then falls back to `ID_REGEX` if needed.
 - Default ID matching uses `\\b\\d{5,}\\b`.
 - If no ID is found on a page, the file falls back to `page-001.pdf`, `page-002.pdf`, and so on.
