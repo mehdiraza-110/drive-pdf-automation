@@ -1,12 +1,14 @@
 import "dotenv/config";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { Readable } from "node:stream";
+import { fork } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import cors from "cors";
 import express from "express";
 import multer from "multer";
 import { google } from "googleapis";
-import { PDFDocument } from "pdf-lib";
 
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 80);
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
@@ -14,14 +16,6 @@ const FRONTEND_ORIGINS = (process.env.FRONTEND_URLS || process.env.FRONTEND_URL 
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
-
-const app = express();
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: MAX_UPLOAD_BYTES
-  }
-});
 
 const PORT = Number(process.env.PORT || 3010);
 const GOOGLE_DRIVE_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
@@ -36,20 +30,40 @@ const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME || "drive_tokens";
 const OAUTH_STATE_COOKIE_NAME = process.env.OAUTH_STATE_COOKIE_NAME || "oauth_state";
 const COOKIE_SAME_SITE = process.env.COOKIE_SAME_SITE || "lax";
 const COOKIE_SECURE = process.env.COOKIE_SECURE === "true";
-const STUDENT_ID_LABEL_REGEX =
-  process.env.STUDENT_ID_LABEL_REGEX || "Std\\.?\\s*#\\s*:?";
-const ID_REGEX = process.env.ID_REGEX || "\\b\\d{5,}\\b";
 const TOKEN_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const STATE_COOKIE_MAX_AGE_MS = 10 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 15 * 60 * 1000);
 const HEADERS_TIMEOUT_MS = Number(process.env.HEADERS_TIMEOUT_MS || 16 * 60 * 1000);
 const KEEP_ALIVE_TIMEOUT_MS = Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 75 * 1000);
 const JOB_RETENTION_MS = Number(process.env.JOB_RETENTION_MS || 6 * 60 * 60 * 1000);
+const RUNTIME_DIR = process.env.RUNTIME_DIR || path.join(process.cwd(), "runtime");
+const UPLOADS_DIR = path.join(RUNTIME_DIR, "uploads");
+const DRIVE_UPLOAD_CONCURRENCY = Math.max(1, Number(process.env.DRIVE_UPLOAD_CONCURRENCY || 6));
 const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/drive.readonly"
 ];
 const uploadJobs = new Map();
+
+mkdirSync(UPLOADS_DIR, {
+  recursive: true
+});
+
+const app = express();
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_request, _file, callback) => {
+      callback(null, UPLOADS_DIR);
+    },
+    filename: (_request, file, callback) => {
+      const extension = path.extname(file.originalname || ".pdf") || ".pdf";
+      callback(null, `${Date.now()}-${randomBytes(8).toString("hex")}${extension}`);
+    }
+  }),
+  limits: {
+    fileSize: MAX_UPLOAD_BYTES
+  }
+});
 
 app.use(
   cors({
@@ -266,125 +280,12 @@ function storeTokens(response, tokens) {
   setEncryptedCookie(response, AUTH_COOKIE_NAME, tokens, TOKEN_COOKIE_MAX_AGE_MS);
 }
 
-function createAuthenticatedDrive(tokens, onTokens) {
-  if (!tokens) {
-    const error = new Error("Google Drive is not connected yet.");
-    error.statusCode = 401;
-    throw error;
-  }
-
-  const auth = createOAuthClient();
-  auth.setCredentials(tokens);
-
-  if (onTokens) {
-    auth.on("tokens", (nextTokens) => {
-      onTokens({
-        ...tokens,
-        ...nextTokens
-      });
-    });
-  }
-
-  return google.drive({
-    version: "v3",
-    auth
-  });
-}
-
-function getAuthenticatedDrive(request, response) {
-  return createAuthenticatedDrive(getStoredTokens(request), (nextTokens) => {
-    storeTokens(response, nextTokens);
-  });
-}
-
 function getSharedDrive() {
   return createServiceAccountDrive();
 }
 
-function sanitizeFileName(value) {
-  return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").trim();
-}
-
 function escapeDriveQuery(value) {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-}
-
-function stripOuterWordBoundaries(pattern) {
-  return pattern.replace(/^\\b/, "").replace(/\\b$/, "");
-}
-
-async function extractTextFromPdfPage(pageBytes) {
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const loadingTask = pdfjsLib.getDocument({
-    data: new Uint8Array(pageBytes),
-    disableWorker: true
-  });
-  const pdf = await loadingTask.promise;
-  const page = await pdf.getPage(1);
-  const content = await page.getTextContent();
-
-  return content.items.map((item) => item.str).join(" ");
-}
-
-function resolveIdFromText(text, pageNumber) {
-  const rawIdPattern = stripOuterWordBoundaries(ID_REGEX);
-  const labeledMatcher = new RegExp(`(?:${STUDENT_ID_LABEL_REGEX})\\s*(${rawIdPattern})`, "i");
-  const labeledMatch = text.match(labeledMatcher);
-
-  if (labeledMatch?.[1]) {
-    return sanitizeFileName(labeledMatch[1]);
-  }
-
-  const matcher = new RegExp(ID_REGEX, "i");
-  const match = text.match(matcher);
-
-  if (match?.[0]) {
-    return sanitizeFileName(match[0]);
-  }
-
-  return `page-${String(pageNumber).padStart(3, "0")}`;
-}
-
-async function splitPdf(pdfBuffer) {
-  const sourcePdf = await PDFDocument.load(pdfBuffer);
-  const totalPages = sourcePdf.getPageCount();
-  const pages = [];
-
-  for (let index = 0; index < totalPages; index += 1) {
-    const singlePagePdf = await PDFDocument.create();
-    const [page] = await singlePagePdf.copyPages(sourcePdf, [index]);
-    singlePagePdf.addPage(page);
-    const pageBytes = await singlePagePdf.save();
-    const pageText = await extractTextFromPdfPage(pageBytes);
-    const idValue = resolveIdFromText(pageText, index + 1);
-
-    pages.push({
-      pageNumber: index + 1,
-      idValue,
-      pageBytes: Buffer.from(pageBytes)
-    });
-  }
-
-  return {
-    totalPages,
-    pages
-  };
-}
-
-async function uploadFileToDrive(drive, fileName, fileBuffer) {
-  const response = await drive.files.create({
-    requestBody: {
-      name: `${fileName}.pdf`,
-      parents: [GOOGLE_DRIVE_FOLDER_ID]
-    },
-    media: {
-      mimeType: "application/pdf",
-      body: Readable.from(fileBuffer)
-    },
-    fields: "id, name, webViewLink"
-  });
-
-  return response.data;
 }
 
 async function findFileByName(drive, fileName) {
@@ -421,61 +322,6 @@ async function countFilesInFolder(drive) {
   return totalCount;
 }
 
-async function processUploadJob(job, fileBuffer, tokens) {
-  try {
-    touchJob(job, {
-      status: "processing",
-      progressMessage: "Splitting PDF and reading page identifiers..."
-    });
-
-    const drive = createAuthenticatedDrive(tokens, (nextTokens) => {
-      touchJob(job, {
-        pendingTokens: nextTokens
-      });
-    });
-    const { totalPages, pages } = await splitPdf(fileBuffer);
-    const usedNames = new Map();
-
-    touchJob(job, {
-      totalPages,
-      progressMessage: `Uploading 0 of ${totalPages} pages to Google Drive...`
-    });
-
-    for (const page of pages) {
-      const previousCount = usedNames.get(page.idValue) || 0;
-      usedNames.set(page.idValue, previousCount + 1);
-
-      const uniqueName =
-        previousCount === 0 ? page.idValue : `${page.idValue}-${previousCount + 1}`;
-
-      const uploaded = await uploadFileToDrive(drive, uniqueName, page.pageBytes);
-
-      job.uploadedFiles.push({
-        fileId: uploaded.id,
-        fileName: uploaded.name,
-        pageNumber: page.pageNumber,
-        webViewLink: uploaded.webViewLink
-      });
-
-      touchJob(job, {
-        processedPages: job.uploadedFiles.length,
-        progressMessage: `Uploaded ${job.uploadedFiles.length} of ${totalPages} pages to Google Drive...`
-      });
-    }
-
-    touchJob(job, {
-      status: "completed",
-      progressMessage: `Completed ${job.uploadedFiles.length} uploads successfully.`
-    });
-  } catch (error) {
-    touchJob(job, {
-      status: "failed",
-      error: error.message || "Failed to split and upload the PDF.",
-      progressMessage: "Upload processing failed."
-    });
-  }
-}
-
 function getAuthStatus(request) {
   const tokens = getStoredTokens(request);
 
@@ -485,12 +331,13 @@ function getAuthStatus(request) {
   };
 }
 
-function createUploadJob(fileName) {
+function createUploadJob(fileName, filePath) {
   const id = randomBytes(12).toString("hex");
   const job = {
     id,
     status: "queued",
     sourceName: fileName,
+    sourcePath: filePath,
     totalPages: null,
     processedPages: 0,
     uploadedFiles: [],
@@ -498,7 +345,8 @@ function createUploadJob(fileName) {
     progressMessage: "Waiting to start upload processing...",
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    pendingTokens: null
+    pendingTokens: null,
+    workerPid: null
   };
 
   uploadJobs.set(id, job);
@@ -516,7 +364,7 @@ function cleanupExpiredJobs() {
   const cutoff = Date.now() - JOB_RETENTION_MS;
 
   for (const [jobId, job] of uploadJobs.entries()) {
-    if (job.updatedAt < cutoff) {
+    if (job.updatedAt < cutoff && job.status !== "processing" && job.status !== "queued") {
       uploadJobs.delete(jobId);
     }
   }
@@ -535,6 +383,96 @@ function serializeJob(job) {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt
   };
+}
+
+function startUploadJob(job, tokens) {
+  const workerPath = path.join(process.cwd(), "server", "upload-worker.js");
+  const child = fork(workerPath, {
+    stdio: ["ignore", "inherit", "inherit", "ipc"]
+  });
+
+  touchJob(job, {
+    workerPid: child.pid,
+    progressMessage: `Upload accepted. Starting worker with concurrency ${DRIVE_UPLOAD_CONCURRENCY}...`
+  });
+
+  child.on("message", (message) => {
+    if (!message || typeof message !== "object") {
+      return;
+    }
+
+    if (message.type === "progress") {
+      touchJob(job, {
+        status: "processing",
+        totalPages: message.totalPages ?? job.totalPages,
+        processedPages: message.processedPages ?? job.processedPages,
+        progressMessage: message.progressMessage || job.progressMessage
+      });
+      return;
+    }
+
+    if (message.type === "fileUploaded") {
+      job.uploadedFiles.push(message.file);
+      touchJob(job, {
+        status: "processing",
+        totalPages: message.totalPages ?? job.totalPages,
+        processedPages: message.processedPages ?? job.processedPages,
+        progressMessage: message.progressMessage || job.progressMessage
+      });
+      return;
+    }
+
+    if (message.type === "tokens") {
+      touchJob(job, {
+        pendingTokens: message.tokens
+      });
+      return;
+    }
+
+    if (message.type === "completed") {
+      touchJob(job, {
+        status: "completed",
+        totalPages: message.totalPages ?? job.totalPages,
+        processedPages: message.processedPages ?? job.processedPages,
+        progressMessage: message.progressMessage || job.progressMessage,
+        workerPid: null
+      });
+      return;
+    }
+
+    if (message.type === "failed") {
+      touchJob(job, {
+        status: "failed",
+        error: message.error || "Upload processing failed.",
+        progressMessage: "Upload processing failed.",
+        workerPid: null
+      });
+    }
+  });
+
+  child.on("exit", async (code, signal) => {
+    if (job.status === "completed" || job.status === "failed") {
+      return;
+    }
+
+    await fs.unlink(job.sourcePath).catch(() => {});
+    touchJob(job, {
+      status: "failed",
+      error: `Upload worker stopped unexpectedly (code ${code ?? "unknown"}, signal ${signal || "none"}).`,
+      progressMessage: "Upload worker stopped unexpectedly.",
+      workerPid: null
+    });
+  });
+
+  child.send({
+    type: "start",
+    job: {
+      id: job.id,
+      sourceName: job.sourceName,
+      filePath: job.sourcePath,
+      tokens
+    }
+  });
 }
 
 app.get("/api/health", (_request, response) => {
@@ -608,20 +546,27 @@ app.post("/api/upload-split", upload.single("pdf"), async (request, response) =>
       return response.status(400).json({ error: "No PDF file was uploaded." });
     }
 
+    if (!request.file.path) {
+      return response.status(500).json({ error: "Uploaded PDF could not be stored on the server." });
+    }
+
     const tokens = getStoredTokens(request);
 
     if (!tokens) {
       return response.status(401).json({ error: "Google Drive is not connected yet." });
     }
 
-    const job = createUploadJob(request.file.originalname);
-
-    void processUploadJob(job, Buffer.from(request.file.buffer), tokens);
+    const job = createUploadJob(request.file.originalname, request.file.path);
+    startUploadJob(job, tokens);
 
     return response.status(202).json({
       job: serializeJob(job)
     });
   } catch (error) {
+    if (request.file?.path) {
+      await fs.unlink(request.file.path).catch(() => {});
+    }
+
     return response.status(error.statusCode || 500).json({
       error: error.message || "Failed to split and upload the PDF."
     });
