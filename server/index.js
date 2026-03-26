@@ -41,10 +41,15 @@ const STUDENT_ID_LABEL_REGEX =
 const ID_REGEX = process.env.ID_REGEX || "\\b\\d{5,}\\b";
 const TOKEN_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const STATE_COOKIE_MAX_AGE_MS = 10 * 60 * 1000;
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 15 * 60 * 1000);
+const HEADERS_TIMEOUT_MS = Number(process.env.HEADERS_TIMEOUT_MS || 16 * 60 * 1000);
+const KEEP_ALIVE_TIMEOUT_MS = Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 75 * 1000);
+const JOB_RETENTION_MS = Number(process.env.JOB_RETENTION_MS || 6 * 60 * 60 * 1000);
 const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/drive.readonly"
 ];
+const uploadJobs = new Map();
 
 app.use(
   cors({
@@ -261,9 +266,7 @@ function storeTokens(response, tokens) {
   setEncryptedCookie(response, AUTH_COOKIE_NAME, tokens, TOKEN_COOKIE_MAX_AGE_MS);
 }
 
-function getAuthenticatedDrive(request, response) {
-  const tokens = getStoredTokens(request);
-
+function createAuthenticatedDrive(tokens, onTokens) {
   if (!tokens) {
     const error = new Error("Google Drive is not connected yet.");
     error.statusCode = 401;
@@ -273,16 +276,24 @@ function getAuthenticatedDrive(request, response) {
   const auth = createOAuthClient();
   auth.setCredentials(tokens);
 
-  auth.on("tokens", (nextTokens) => {
-    storeTokens(response, {
-      ...tokens,
-      ...nextTokens
+  if (onTokens) {
+    auth.on("tokens", (nextTokens) => {
+      onTokens({
+        ...tokens,
+        ...nextTokens
+      });
     });
-  });
+  }
 
   return google.drive({
     version: "v3",
     auth
+  });
+}
+
+function getAuthenticatedDrive(request, response) {
+  return createAuthenticatedDrive(getStoredTokens(request), (nextTokens) => {
+    storeTokens(response, nextTokens);
   });
 }
 
@@ -410,12 +421,119 @@ async function countFilesInFolder(drive) {
   return totalCount;
 }
 
+async function processUploadJob(job, fileBuffer, tokens) {
+  try {
+    touchJob(job, {
+      status: "processing",
+      progressMessage: "Splitting PDF and reading page identifiers..."
+    });
+
+    const drive = createAuthenticatedDrive(tokens, (nextTokens) => {
+      touchJob(job, {
+        pendingTokens: nextTokens
+      });
+    });
+    const { totalPages, pages } = await splitPdf(fileBuffer);
+    const usedNames = new Map();
+
+    touchJob(job, {
+      totalPages,
+      progressMessage: `Uploading 0 of ${totalPages} pages to Google Drive...`
+    });
+
+    for (const page of pages) {
+      const previousCount = usedNames.get(page.idValue) || 0;
+      usedNames.set(page.idValue, previousCount + 1);
+
+      const uniqueName =
+        previousCount === 0 ? page.idValue : `${page.idValue}-${previousCount + 1}`;
+
+      const uploaded = await uploadFileToDrive(drive, uniqueName, page.pageBytes);
+
+      job.uploadedFiles.push({
+        fileId: uploaded.id,
+        fileName: uploaded.name,
+        pageNumber: page.pageNumber,
+        webViewLink: uploaded.webViewLink
+      });
+
+      touchJob(job, {
+        processedPages: job.uploadedFiles.length,
+        progressMessage: `Uploaded ${job.uploadedFiles.length} of ${totalPages} pages to Google Drive...`
+      });
+    }
+
+    touchJob(job, {
+      status: "completed",
+      progressMessage: `Completed ${job.uploadedFiles.length} uploads successfully.`
+    });
+  } catch (error) {
+    touchJob(job, {
+      status: "failed",
+      error: error.message || "Failed to split and upload the PDF.",
+      progressMessage: "Upload processing failed."
+    });
+  }
+}
+
 function getAuthStatus(request) {
   const tokens = getStoredTokens(request);
 
   return {
     isAuthenticated: Boolean(tokens),
     hasRefreshToken: Boolean(tokens?.refresh_token)
+  };
+}
+
+function createUploadJob(fileName) {
+  const id = randomBytes(12).toString("hex");
+  const job = {
+    id,
+    status: "queued",
+    sourceName: fileName,
+    totalPages: null,
+    processedPages: 0,
+    uploadedFiles: [],
+    error: "",
+    progressMessage: "Waiting to start upload processing...",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    pendingTokens: null
+  };
+
+  uploadJobs.set(id, job);
+  cleanupExpiredJobs();
+  return job;
+}
+
+function touchJob(job, patch = {}) {
+  Object.assign(job, patch, {
+    updatedAt: Date.now()
+  });
+}
+
+function cleanupExpiredJobs() {
+  const cutoff = Date.now() - JOB_RETENTION_MS;
+
+  for (const [jobId, job] of uploadJobs.entries()) {
+    if (job.updatedAt < cutoff) {
+      uploadJobs.delete(jobId);
+    }
+  }
+}
+
+function serializeJob(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    sourceName: job.sourceName,
+    totalPages: job.totalPages,
+    processedPages: job.processedPages,
+    files: job.uploadedFiles,
+    error: job.error,
+    progressMessage: job.progressMessage,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt
   };
 }
 
@@ -490,38 +608,51 @@ app.post("/api/upload-split", upload.single("pdf"), async (request, response) =>
       return response.status(400).json({ error: "No PDF file was uploaded." });
     }
 
-    const drive = getAuthenticatedDrive(request, response);
-    const { totalPages, pages } = await splitPdf(request.file.buffer);
-    const uploadedFiles = [];
-    const usedNames = new Map();
+    const tokens = getStoredTokens(request);
 
-    for (const page of pages) {
-      const previousCount = usedNames.get(page.idValue) || 0;
-      usedNames.set(page.idValue, previousCount + 1);
-
-      const uniqueName =
-        previousCount === 0 ? page.idValue : `${page.idValue}-${previousCount + 1}`;
-
-      const uploaded = await uploadFileToDrive(drive, uniqueName, page.pageBytes);
-
-      uploadedFiles.push({
-        fileId: uploaded.id,
-        fileName: uploaded.name,
-        pageNumber: page.pageNumber,
-        webViewLink: uploaded.webViewLink
-      });
+    if (!tokens) {
+      return response.status(401).json({ error: "Google Drive is not connected yet." });
     }
 
-    return response.json({
-      sourceName: request.file.originalname,
-      totalPages,
-      files: uploadedFiles
+    const job = createUploadJob(request.file.originalname);
+
+    void processUploadJob(job, Buffer.from(request.file.buffer), tokens);
+
+    return response.status(202).json({
+      job: serializeJob(job)
     });
   } catch (error) {
     return response.status(error.statusCode || 500).json({
       error: error.message || "Failed to split and upload the PDF."
     });
   }
+});
+
+app.get("/api/upload-jobs/:jobId", (request, response) => {
+  const tokens = getStoredTokens(request);
+
+  if (!tokens) {
+    return response.status(401).json({ error: "Google Drive is not connected yet." });
+  }
+
+  cleanupExpiredJobs();
+
+  const job = uploadJobs.get(request.params.jobId);
+
+  if (!job) {
+    return response.status(404).json({ error: "Upload job not found." });
+  }
+
+  if (job.pendingTokens) {
+    storeTokens(response, job.pendingTokens);
+    touchJob(job, {
+      pendingTokens: null
+    });
+  }
+
+  return response.json({
+    job: serializeJob(job)
+  });
 });
 
 app.get("/api/admin/folder-stats", async (_request, response) => {
@@ -609,9 +740,15 @@ app.use((error, _request, response, next) => {
 export default app;
 
 export function startServer() {
-  return app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Server listening on http://localhost:${PORT}`);
   });
+
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+
+  return server;
 }
 
 const runningThisFileDirectly =

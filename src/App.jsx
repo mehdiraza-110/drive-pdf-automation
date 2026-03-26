@@ -267,6 +267,7 @@ function UploadPanel({ auth, setAuth }) {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState("");
+  const [activeJobId, setActiveJobId] = useState("");
   const [folderStatsLoading, setFolderStatsLoading] = useState(true);
   const [folderFileCount, setFolderFileCount] = useState(null);
   const [folderStatsError, setFolderStatsError] = useState("");
@@ -308,6 +309,74 @@ function UploadPanel({ auth, setAuth }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!activeJobId) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function pollJobStatus() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/upload-jobs/${activeJobId}`, {
+          credentials: "include"
+        });
+        const data = await parseJsonResponse(response);
+
+        if (cancelled) {
+          return;
+        }
+
+        const job = data.job;
+        setLoadingStep(job.progressMessage || "Processing challan file...");
+
+        if (job.status === "completed") {
+          setResults(job.files);
+          setSummary({
+            sourceName: job.sourceName,
+            totalPages: job.totalPages
+          });
+          setFolderFileCount((currentCount) =>
+            typeof currentCount === "number" ? currentCount + job.files.length : currentCount
+          );
+          setLoading(false);
+          setActiveJobId("");
+          return;
+        }
+
+        if (job.status === "failed") {
+          setError(job.error || "Upload processing failed.");
+          setLoading(false);
+          setActiveJobId("");
+          return;
+        }
+
+        window.setTimeout(pollJobStatus, 2000);
+      } catch (jobError) {
+        if (cancelled) {
+          return;
+        }
+
+        if (jobError.message.includes("not connected")) {
+          setAuth((current) => ({
+            ...current,
+            isAuthenticated: false
+          }));
+        }
+
+        setError(jobError.message);
+        setLoading(false);
+        setActiveJobId("");
+      }
+    }
+
+    pollJobStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeJobId, setAuth]);
+
   async function handleSubmit(event) {
     event.preventDefault();
 
@@ -317,32 +386,26 @@ function UploadPanel({ auth, setAuth }) {
     }
 
     setLoading(true);
-    setLoadingStep("Uploading and processing challan file...");
+    setLoadingStep("Uploading file to the server...");
     setError("");
     setResults([]);
     setSummary(null);
+    setActiveJobId("");
+    let jobQueued = false;
 
     try {
       const formData = new FormData();
       formData.append("pdf", file);
 
-      setLoadingStep("Uploading file to the server...");
       const response = await fetch(`${API_BASE_URL}/api/upload-split`, {
         method: "POST",
         body: formData,
         credentials: "include"
       });
-      setLoadingStep("Splitting pages and saving challans...");
       const data = await parseJsonResponse(response);
-
-      setResults(data.files);
-      setSummary({
-        sourceName: data.sourceName,
-        totalPages: data.totalPages
-      });
-      setFolderFileCount((currentCount) =>
-        typeof currentCount === "number" ? currentCount + data.files.length : currentCount
-      );
+      jobQueued = true;
+      setActiveJobId(data.job.id);
+      setLoadingStep(data.job.progressMessage || "Upload queued. Processing will start shortly...");
     } catch (uploadError) {
       if (uploadError.message.includes("not connected")) {
         setAuth((current) => ({
@@ -352,8 +415,10 @@ function UploadPanel({ auth, setAuth }) {
       }
       setError(uploadError.message);
     } finally {
-      setLoading(false);
-      setLoadingStep("");
+      if (!jobQueued) {
+        setLoading(false);
+        setLoadingStep("");
+      }
     }
   }
 
@@ -403,6 +468,7 @@ function UploadPanel({ auth, setAuth }) {
               <p className="result-card__label">Processing</p>
               <h3>Please wait while challans are being prepared.</h3>
               <p>{loadingStep}</p>
+              {activeJobId ? <p>Job ID: {activeJobId}</p> : null}
             </div>
           </div>
         ) : null}
